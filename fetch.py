@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 BASE_URL = os.environ.get("PSYNC_URL", "https://getpsync.vercel.app").rstrip("/")
-TOKEN = os.environ.get("PSYNC_TOKEN", "").strip()
+TOKEN = os.environ.get("PSYNC_TOKEN", "psync@prayag").strip()
 
 LINE_TIMESTAMP = re.compile(r"^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]", re.MULTILINE)
 RETRIES = 2
