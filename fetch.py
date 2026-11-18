@@ -137,8 +137,18 @@ yang dan aku kamu tidak ini itu dengan untuk
 """.split())
 
 
+# made-up words seen in the junk text, left out the ones that are real words (fox, rim, rima, num)
+JUNK_WORDS = frozenset("""
+bureha yuya tib gef haqes kel yix biduy jonuga romu kuj siyace rikuwa miduf domadi dolun cavay biba mej
+""".split())
+
+
 def looks_like_junk(texts):
     """True for made-up filler text some providers send instead of a 404."""
+    seen = set(re.findall(r"[a-z]+", " ".join(texts).lower()))
+    if len(seen & JUNK_WORDS) >= 3:
+        return True
+
     lines = []
     for text in texts:
         cleaned = re.sub(r"[^\w' ]", "", text.lower().replace("\u2019", "'")).strip()
