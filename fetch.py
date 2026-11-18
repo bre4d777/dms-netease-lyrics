@@ -121,6 +121,45 @@ def space_words(lrc):
     return WORD_TAG_GAP.sub(" ", lrc)
 
 
+# frequent words across a few languages, real lyrics always hit these, the junk text never does
+COMMON = frozenset("""
+a an and the to of in on at by for from with as or but so if then than that this these those it its is are
+was were be been am i im me my mine we us our you your youre he him his she her they them their there here
+what when who why how all just like can cant dont not no yes do did will would have had get got know love
+say one now never ever back up out down oh ooh yeah baby ill ive
+el la los las de que y en un una es te tu mi se con por para lo yo si mas pero como ya
+o os as um uma do da em eu voce nao mas pra meu minha
+le les des du et est je il elle nous vous pas ne qui dans pour sur mon ma
+der die das und ich du nicht ist ein mit zu den
+il di che e non per ti sei
+hai hain ka ki ke ko mein main tum na nahi hoon ho bhi to yeh ye woh mere tere mera tera dil pyar aur kya jo tha thi hum kuch bas
+yang dan aku kamu tidak ini itu dengan untuk
+""".split())
+
+
+def looks_like_junk(texts):
+    """True for made-up filler text some providers send instead of a 404."""
+    lines = []
+    for text in texts:
+        cleaned = re.sub(r"[^\w' ]", "", text.lower().replace("\u2019", "'")).strip()
+        if cleaned:
+            lines.append(cleaned)
+    if len(lines) < 6:
+        return False
+
+    tokens = [t for line in lines for t in line.split()]
+    # only judge plain a-z text, other scripts and accents are left alone
+    if not all(re.fullmatch(r"[a-z']+", t) for t in tokens):
+        return False
+
+    # real songs repeat their chorus, filler does not
+    if len(set(lines)) / len(lines) < 0.9:
+        return False
+
+    common = sum(t.replace("'", "") in COMMON for t in tokens)
+    return common / len(tokens) < 0.05
+
+
 def call(params):
     query = urlencode(params)
     headers = {
@@ -186,6 +225,11 @@ def fetch(track):
     try:
         data = json.loads(raw)
         if isinstance(data, dict):
+            lines = data.get("lines")
+            if isinstance(lines, list) and looks_like_junk(
+                [ln.get("text") or "" for ln in lines if isinstance(ln, dict)]
+            ):
+                return None
             lyrics = json_to_lrc(data, enable_word_sync=True)
             if lyrics and LINE_TIMESTAMP.search(lyrics):
                 return {"format": "lrc", "lyrics": lyrics}
@@ -193,6 +237,8 @@ def fetch(track):
         pass
 
     if LINE_TIMESTAMP.search(raw):
+        if looks_like_junk([re.sub(r"\[[^\]]*\]|<[^>]*>", "", ln) for ln in raw.splitlines()]):
+            return None
         return {"format": "lrc", "lyrics": space_words(raw)}
 
     return None
