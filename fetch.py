@@ -13,16 +13,78 @@ BASE_URL = os.environ.get("PSYNC_URL", "https://getpsync.vercel.app").rstrip("/"
 TOKEN = os.environ.get("PSYNC_TOKEN", "psync@prayag").strip()
 
 LINE_TIMESTAMP = re.compile(r"^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]", re.MULTILINE)
-RETRIES = 2
-TIMEOUT = 30
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+RETRIES = 0
+TIMEOUT = 7  # Go kills the command at 8s
+
+
+class PsyncError(Exception):
+    """Lookup failed for a reason that says nothing about the song, so it must not be cached as a miss."""
 
 
 def ms_to_lrc_time(ms, bracket="square"):
-    total_cs = max(0, int(round(float(ms) / 10)))
+    total_cs = max(0, round(float(ms) / 10))
     minutes, remainder = divmod(total_cs, 6000)
     seconds, centis = divmod(remainder, 100)
     stamp = f"{minutes:02d}:{seconds:02d}.{centis:02d}"
     return f"[{stamp}]" if bracket == "square" else f"<{stamp}>"
+
+
+def spaces_from_text(stripped, text):
+    """Use the line's own text to see which word boundaries really have a space."""
+    low = text.lower()
+    pos = 0
+    spans = []
+    for w in stripped:
+        idx = low.find(w.lower(), pos)
+        if idx == -1:
+            return None
+        spans.append((idx, idx + len(w)))
+        pos = idx + len(w)
+    return [
+        any(c.isspace() for c in text[spans[i][1]:spans[i + 1][0]])
+        for i in range(len(spans) - 1)
+    ]
+
+
+def words_to_lrc(words, line_text=""):
+    parts = []
+    for w in words:
+        raw = w.get("text") or ""
+        if not raw.strip():
+            continue
+        start = w.get("start")
+        tag = ms_to_lrc_time(start, bracket="angle") if start is not None else ""
+        parts.append((tag, raw))
+
+    if not parts:
+        return ""
+
+    # does the server give us real whitespace between words?
+    has_ws = any(r[-1].isspace() for _, r in parts[:-1]) or any(
+        r[0].isspace() for _, r in parts[1:]
+    )
+
+    spaces = None
+    if not has_ws and line_text:
+        spaces = spaces_from_text([r.strip() for _, r in parts], line_text)
+
+    out = []
+    for i, (tag, raw) in enumerate(parts):
+        stripped = raw.strip()
+        lead = raw[: len(raw) - len(raw.lstrip())]
+        trail = raw[len(raw.rstrip()):]
+        out.append(f"{lead}{tag}{stripped}{trail}")
+
+        if i < len(parts) - 1 and not has_ws:
+            nxt = parts[i + 1][1].strip()
+            if spaces is not None:
+                if spaces[i]:
+                    out.append(" ")
+            elif not (CJK.match(stripped[-1]) and CJK.match(nxt[0])):
+                out.append(" ")
+
+    return "".join(out).rstrip()
 
 
 def json_to_lrc(data, enable_word_sync=True):
@@ -42,15 +104,7 @@ def json_to_lrc(data, enable_word_sync=True):
         words = line.get("words")
 
         if is_word_sync and isinstance(words, list) and words:
-            word_parts = []
-            for w in words:
-                w_text = (w.get("text") or "").strip()
-                w_start = w.get("start")
-                if w_text and w_start is not None:
-                    word_parts.append(f"{ms_to_lrc_time(w_start, bracket='angle')}{w_text}")
-                elif w_text:
-                    word_parts.append(w_text)
-            lrc_lines.append(f"{line_prefix}{' '.join(word_parts)}")
+            lrc_lines.append(f"{line_prefix}{words_to_lrc(words, line.get('text') or '')}")
         else:
             text = (line.get("text") or "").strip()
             lrc_lines.append(f"{line_prefix}{text}")
@@ -58,7 +112,9 @@ def json_to_lrc(data, enable_word_sync=True):
     return "\n".join(lrc_lines) if lrc_lines else None
 
 
-WORD_TAG_GAP = re.compile(r"(?<=[^\s\]\-])(?=<\d{1,3}:\d{2}[.:]\d{1,3}>)")
+WORD_TAG_GAP = re.compile(
+    r"(?<=[^\s\]\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])(?=<\d{1,3}:\d{2}[.:]\d{1,3}>)"
+)
 
 
 def space_words(lrc):
@@ -82,8 +138,7 @@ def call(params):
                 return response.read().decode("utf-8", "replace")
         except HTTPError as error:
             if error.code == 401:
-                print("psync rejected the token", file=sys.stderr)
-                return None
+                raise PsyncError("psync rejected the token") from error
             if error.code == 429 and attempt < RETRIES:
                 try:
                     wait = float(error.headers.get("Retry-After") or 2)
@@ -94,12 +149,14 @@ def call(params):
             if error.code >= 500 and attempt < RETRIES:
                 time.sleep(2 * (attempt + 1))
                 continue
+            if error.code == 429 or error.code >= 500:
+                raise PsyncError(f"HTTP {error.code}") from error
             return None
-        except (URLError, TimeoutError, OSError):
+        except (URLError, TimeoutError, OSError) as error:
             if attempt < RETRIES:
                 time.sleep(2 * (attempt + 1))
                 continue
-            return None
+            raise PsyncError(f"network error: {error}") from error
 
     return None
 
@@ -113,13 +170,14 @@ def fetch(track):
     if not title or not artist:
         return None
 
-    params = {"title": title, "artist": artist, "format": "lrc"}
+    # json so the server's real word spacing survives
+    params: dict[str, str | int] = {"title": title, "artist": artist, "format": "json"}
 
     if album:
         params["album"] = album
 
     if duration:
-        params["duration"] = int(round(float(duration)))
+        params["duration"] = round(float(duration))
 
     raw = call(params)
     if not raw:
@@ -143,8 +201,8 @@ def fetch(track):
 if __name__ == "__main__":
     try:
         result = fetch(json.load(sys.stdin))
-    except Exception as error:
+    except (PsyncError, OSError, ValueError, TypeError, AttributeError) as error:
         print(f"psync error: {error}", file=sys.stderr)
-        result = None
+        sys.exit(1)
     if result is not None:
         json.dump(result, sys.stdout, ensure_ascii=False)
