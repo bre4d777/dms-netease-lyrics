@@ -1,15 +1,15 @@
 {
-  "id": "neteaseLyrics",
-  "name": "NetEase Cloud Music Lyrics",
-  "description": "Adds line-synced lyrics from NetEase Cloud Music to the built-in DMS media player.",
+  "id": "psyncLyrics",
+  "name": "psync Synced Lyrics",
+  "description": "Adds word-synced and line-synced lyrics from psync to the built-in DMS media player.",
   "version": "1.0.0",
   "author": "mijiaoqvq",
   "type": "lyrics",
   "requires_dms": ">=2.0.0",
   "lyrics": {
     "command": "./fetch.py",
-    "name": "NetEase Cloud Music",
-    "url": "https://music.163.com/",
-    "wordSync": false
+    "name": "psync",
+    "url": "https://getpsync.vercel.app/",
+    "wordSync": true
   }
 }
