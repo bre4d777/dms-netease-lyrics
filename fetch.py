@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 BASE_URL = os.environ.get("PSYNC_URL", "https://getpsync.vercel.app").rstrip("/")
-TOKEN = os.environ.get("PSYNC_TOKEN", "psync@prayag").strip()
+TOKEN = os.environ.get("PSYNC_TOKEN", "").strip()
 
 LINE_TIMESTAMP = re.compile(r"^\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]", re.MULTILINE)
 RETRIES = 2
@@ -56,6 +56,13 @@ def json_to_lrc(data, enable_word_sync=True):
             lrc_lines.append(f"{line_prefix}{text}")
 
     return "\n".join(lrc_lines) if lrc_lines else None
+
+
+WORD_TAG_GAP = re.compile(r"(?<=[^\s\]\-])(?=<\d{1,3}:\d{2}[.:]\d{1,3}>)")
+
+
+def space_words(lrc):
+    return WORD_TAG_GAP.sub(" ", lrc)
 
 
 def call(params):
@@ -128,7 +135,7 @@ def fetch(track):
         pass
 
     if LINE_TIMESTAMP.search(raw):
-        return {"format": "lrc", "lyrics": raw}
+        return {"format": "lrc", "lyrics": space_words(raw)}
 
     return None
 
